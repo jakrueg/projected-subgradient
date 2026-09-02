@@ -17,7 +17,10 @@ The implementations in ``prox_grad.py`` differ in the way of stepsize selection:
 * ```pgd_max```: nonmonotone linesearch using a max rule
 * ```pgd_ac```: linesearch free auto-conditioned stepsize selection by Yagishita and Ito
 
-
+## Numerical Examples
+* An MPEC style two-dimensional problem that is used to illustrate the importance of the particular stationarity conditions provided by the projected subgradient method.
+* An implementation of the MAXCUT graph problem on data from the [Biq Mac library](https://biqmac.aau.at/biqmaclib.html).
+* Robust principal component analysis for video background subtraction, applied to the [Change Detection 2014](https://changedetection.net/dataset2014/)
 
 
 ## Bug reports and support
