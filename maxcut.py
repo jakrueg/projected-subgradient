@@ -8,7 +8,6 @@ import pandas as pd
 
 import proj_grad
 import proj_maxcut_newton as pmn
-import proj_maxcut_qi_sun as pqs
 
 _OPT_VALUES = None
 
@@ -16,7 +15,7 @@ def _load_opt_values():
     global _OPT_VALUES
     if _OPT_VALUES is None:
         root = Path(__file__).parent
-        opt_files = [root / "rudy_opt.csv", root / "ising_opt.csv"]
+        opt_files = [root / "rudy_opt.csv"]
         values = {}
         for path in opt_files:
             if not path.exists():
@@ -33,8 +32,6 @@ def _relative_error(value, optimum):
     if optimum == 0 or not np.isfinite(optimum):
         return float("nan")
     return abs(value - optimum) / abs(optimum)
-
-from statsmodels.stats.correlation_tools import corr_nearest
 
 def load_weight_matrix(path):
     path = Path(path)
@@ -71,7 +68,7 @@ def obj(W, L, regularization_factor):
 
 
 def grad_maxcut(W, L, regularization_factor):
-    eigenvalues, eigenvectors = np.linalg.eigh(W)
+    _, eigenvectors = np.linalg.eigh(W)
     v = eigenvectors[:, -1]
     return -0.25 * L + regularization_factor * (np.eye(W.shape[0]) - np.outer(v, v))
 
@@ -95,6 +92,7 @@ def run_single_experiment(
     n = A.shape[0]
     L = np.diag(A @ np.ones(n)) - A
 
+    # set up semidefinite relaxation problem
     W = cp.Variable((n, n), symmetric=True)
     constraints = [
         W >> 0,
@@ -107,24 +105,21 @@ def run_single_experiment(
     if W.value is None:
         raise RuntimeError(f"CVXPY did not return a solution for {data_file}")
 
+    # take solution from CVXPY as starting point for projected gradient descent
     W_opt = np.array(W.value, dtype=float)
 
     print(f"Rank of semidefinite relaxation: {np.linalg.matrix_rank(W_opt)}")
 
     newton_iter_count = 0
-    if projection_method == "newton":
-        def proj(W_current):
-            nonlocal newton_iter_count
-            X_proj, inner_iters = pmn.proj_maxcut_newton(
-                W_current,
-                MAX_ITER_NEWTON=max_iter_newton,
-                return_stats=True,
-            )
-            newton_iter_count += inner_iters
-            return X_proj
-    else:
-        proj = lambda W_current: pqs.nearest_correlation_matrix(W_current)[0]
-        #proj = corr_nearest
+    def proj(W_current):
+        nonlocal newton_iter_count
+        X_proj, inner_iters = pmn.proj_maxcut_newton(
+            W_current,
+            MAX_ITER_NEWTON=max_iter_newton,
+            return_stats=True,
+        )
+        newton_iter_count += inner_iters
+        return X_proj
 
     f = lambda W_current: obj(W_current, L, regularization_factor)
     grad = lambda W_current: grad_maxcut(W_current, L, regularization_factor)
@@ -137,7 +132,6 @@ def run_single_experiment(
         proj=proj,
         max_iter=max_iter_pgd,
         TOL=tol,
-        #barzilai_borwein=True,
     )
     wall_time = time.perf_counter() - start_wall
 
@@ -167,7 +161,7 @@ def run_single_experiment(
         "message": res.message,
     }
 
-
+# run batch processing on problem folders, saving results to a CSV file
 def run_batch(
     data_dir,
     *,
@@ -209,11 +203,11 @@ def parse_args():
     parser.add_argument("--data-dir", type=str, default=None, help="Folder containing many input files")
     parser.add_argument("--output", type=str, default="maxcut_results.csv", help="CSV file for batch results")
     parser.add_argument("--pattern", type=str, default=None, help="Optional glob pattern for batch files")
-    parser.add_argument("--max-iter-pgd", type=int, default=200)
+    parser.add_argument("--max-iter-pgd", type=int, default=1000)
     parser.add_argument("--max-iter-newton", type=int, default=200)
     parser.add_argument("--tol", type=float, default=1e-4)
-    parser.add_argument("--projection-method", type=str, default="newton", choices=["qi_sun", "newton"])
-    parser.add_argument("--regularization-factor", type=float, default=3.0)
+    parser.add_argument("--projection-method", type=str, default="newton", choices=["newton"])
+    parser.add_argument("--regularization-factor", type=float, default=5.0)
     return parser.parse_args()
 
 
