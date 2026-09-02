@@ -1,6 +1,15 @@
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, minres
 
+"""
+Implementation of the preconditioned Newton method by Borsdorf and Higham 
+for determining the nearest correlation matrix, adapted for the MAXCUT problem.
+Reference: Borsdorf, R., & Higham, N. J. (2010).  A preconditioned Newton algorithm for the nearest correlation matrix. IMA Journal of Numerical Analysis, 30(1), 94-107.
+DOI: 10.1093/imanum/drn085
+This implementation uses the MINRES method to solve the linear system in each Newton step.
+"""
+
+
 TOL = 1e-5
 
 class _Converged(Exception):
@@ -42,89 +51,6 @@ def is_nearly_equal(a, b, gamma = 100):
     with the magnitude of the numbers."""
     return abs(a - b) <= gamma * (1 + abs(a) + abs(b)) * np.finfo(float).eps
 
-def _cg_solve_cond(Vk_apply, grad_yk, eta_k, max_cg_iter, phi_k, sqrt_jacobi_cond):
-    """
-    Preconditioned conjugate gradient for the linear system
-
-        V_k d = -grad_yk
-
-    using a diagonal Jacobi-type preconditioner. The routine stops as soon
-    as the residual-based test and the curvature-based test are both met.
-    """
-    grad_yk = np.asarray(grad_yk, dtype=float).ravel()
-    n = grad_yk.shape[0]
-    grad_norm = np.linalg.norm(grad_yk)
-    if grad_norm <= 1e-30:
-        return np.zeros(n)
-
-    if sqrt_jacobi_cond is None:
-        precond = np.ones(n)
-    else:
-        precond = np.asarray(sqrt_jacobi_cond, dtype=float)
-        if precond.ndim == 2:
-            precond = np.diag(precond)
-        if precond.shape != (n,):
-            precond = np.asarray(precond).reshape(-1)
-            if precond.size != n:
-                raise ValueError("preconditioner must have shape (n,) or (n, n)")
-
-    def apply_precond(r):
-        if precond is None:
-            return r.copy()
-        if precond.ndim == 2:
-            return precond @ r
-        return precond * r
-
-    rhs = -grad_yk
-    x = np.zeros(n)
-    r = rhs - Vk_apply(x)
-    z = apply_precond(r)
-    p = z.copy()
-    rz_old = float(np.dot(r, z))
-
-    if rz_old <= 1e-30:
-        return x
-
-    for _ in range(max_cg_iter):
-        Ap = Vk_apply(p)
-        pAp = float(np.dot(p, Ap))
-        if pAp <= 1e-14:
-            break
-
-        alpha = rz_old / pAp
-        x = x + alpha * p
-        r = r - alpha * Ap
-
-        res_norm = np.linalg.norm(grad_yk + Vk_apply(x))
-        d_norm = np.linalg.norm(x)
-
-        cond_2_10 = res_norm <= min(eta_k, grad_norm) * grad_norm
-        cond_2_11 = (
-            d_norm > 1e-14 and
-            (-np.dot(grad_yk, x) / (d_norm * d_norm)) >= min(phi_k, grad_norm)
-        )
-        if cond_2_10 and cond_2_11:
-            return x
-
-        z = apply_precond(r)
-        rz_new = float(np.dot(r, z))
-        if rz_new <= 1e-30:
-            return x
-
-        beta = rz_new / rz_old
-        p = z + beta * p
-        rz_old = rz_new
-    print("fallback")
-    return x
-
-
-
-def minres_cond(Vk_matvec, grad, Dk_diag, eta, varphi,
-                maxiter=None, minres_tol=1e-10, rtol=None):
-    """
-    Compute the new direction d_k as in Step 5 using MINRES with a diagonal preconditioner. 
-    
-    """
 
 def compute_direction(Vk_matvec, grad, Dk_diag, eta, varphi,
                        maxiter=None, minres_tol=1e-10, rtol=None):
@@ -253,6 +179,7 @@ def compute_direction(Vk_matvec, grad, Dk_diag, eta, varphi,
 
 
 def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
+    # step 1: initialize
     n = W0.shape[0]
     y = np.zeros(n)
     eta = 0.5
@@ -260,13 +187,14 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
     mu = 0.5
     rho = 0.3
     sigma = 1e-4
+    #step 2: prepare A
     A = np.copy(W0)
     A = (A + A.T) / 2
     A[np.diag_indices_from(A)] = 1
     newton_iterations = 0
     for k in range(MAX_ITER_NEWTON):
         grad_f_y = grad_f(A, y)
-        # termination check
+        # step 3: termination check
         if np.linalg.norm(grad_f_y) < TOL:
             X_tilde = dual_to_primal(A, y)
             D = np.diag(np.diag(X_tilde))
@@ -274,7 +202,7 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
             X = np.linalg.inv(sqrt_D) @ X_tilde @ np.linalg.inv(sqrt_D)
             return (X, newton_iterations) if return_stats else X
         newton_iterations += 1
-    # eigenvalue decomposition of A + diag(y)
+        # step 4: eigenvalue decomposition of A + diag(y) and construction of W
         eigenvalues, eigenvectors = np.linalg.eigh(A + np.diag(y))
         # Flip so that positive eigenvalues come first; keep eigenvectors in sync.
         eigenvalues = np.flip(eigenvalues)
@@ -305,6 +233,7 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
         Q = P**2
         v = np.sum((Q @ W) * Q, axis=1)
 
+        # set up preconditioner and matrix-vector product for MINRES
         if not np.any(lam_plus > 1e-12):
             # Zero operator case; MINRES will fall back if needed.
             Dk_diag = np.ones(n)
@@ -319,7 +248,7 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
             Dk_diag = 1.0 / v
             def Vkd(h):
                 return mat_vec_v(h, W, P)
-
+        # step 5: compute direction d_k using MINRES with preconditioner and the custom termination checks (4.2) and (4.3)
         d_k, info = compute_direction(
             Vkd,
             grad=grad_f_y,
@@ -334,7 +263,9 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
         #except Exception:
         #    pass
         # info may contain diagnostic reason; if it fell back, d_k will be -grad_f_y
-        # Armijo line search
+        
+        
+        # step 6: Armijo line search
         f_y = f(A, y)
         grad_y = grad_f_y
         grad_y_norm = np.linalg.norm(grad_y)
@@ -355,7 +286,12 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
         else:
             print("Line search failed to find a suitable step size after 100 iterations.")
             break
+        # step 7: update y
         y = y+alpha*d_k
+
+    # If we reach here, we exceeded the maximum number of Newton iterations without convergence.
+    # We can still return the current iterate as an approximate solution.
+
     X_tilde = dual_to_primal(A, y)
     # Normalize to unit diagonal safely (avoid division by zero).
     diag_vals = np.diag(X_tilde).astype(float)
@@ -369,21 +305,3 @@ def proj_maxcut_newton(W0, MAX_ITER_NEWTON=200, return_stats=False):
     X = (inv_sqrt_diag[:, None] * X_tilde) * inv_sqrt_diag[None, :]
     return (X, newton_iterations) if return_stats else X
 
-
-"""
-#if __name__ == "__main__":
-    # quick self-test on a small random "almost correlation" matrix
-np.random.seed(0)
-n = 5
-B = np.random.randn(n, n)
-A = 0.5 * (B + B.T)
-np.fill_diagonal(A, 1.0)
-
-X = proj_maxcut_newton(A)
-
-print("Resulting matrix X:\n", X)
-#print("\nConverged:", info['converged'], "in", info['iterations'], "iterations")
-print("Resulting diagonal (should be ~1):", np.diag(X))
-eigvals = np.linalg.eigvalsh(X)
-print("Eigenvalues of X (should be >= 0):", eigvals)
-"""
