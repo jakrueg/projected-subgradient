@@ -125,7 +125,7 @@ def run_single_experiment(
     grad = lambda W_current: grad_maxcut(W_current, L, regularization_factor)
 
     start_wall = time.perf_counter()
-    res = proj_grad.pgd_mon(
+    res = proj_grad.pgd_avg(
         x0=W_opt,
         f=f,
         grad=grad,
