@@ -48,13 +48,6 @@ def proj_M(X,k):
     # Reshape back to the original matrix shape
     return proj_X.reshape(X.shape)
 
-def proj_M2(X0,k):
-    """Project X onto a sparsity constraint using hard thresholding. This is a more efficient implementation than proj_M."""
-    # Flatten the matrix and get the indices of the k largest absolute values
-    X=X0.copy()
-    thresh = 1
-    X[np.abs(X) < thresh] = 0
-    return X
 
 def proj_D(X, rank):
     """Project X onto the set of matrices with rank <= rank"""
@@ -99,8 +92,6 @@ def pca_synthetic_data(n, rank_max, density, seed=42):
     L = np.dot(L_0, L_0.T)
     print(L.shape)
     rng = np.random.default_rng(seed=42)
-    # E = sparse_random(n, n, density=0.1, format='csr', random_state=np.random.uniform(-500, 500))
-
     E0 = generate_E0(n, n, density, seed=42)
     print(E0.shape, E0.nnz)  
 
@@ -172,23 +163,22 @@ proj = lambda X: proj_D(X, rank_max)
 
 seed = 1
 np.random.seed(seed)
+# start with a random matrix of the same shape as Y
 x_start = np.random.rand(*Y.shape)
-#resBB = proj_grad.pgd_mon(x0=x_start, f=obj, grad=grad, proj=proj,
-#                        max_iter=200, TOL=1e-4, barzilai_borwein=True)
 
-resBB = proj_grad.pgd_avg(x0=x_start, f=obj, grad=grad, proj=proj,
+res = proj_grad.pgd_avg(x0=x_start, f=obj, grad=grad, proj=proj,
                         max_iter=200, TOL=1e-4)
 
 for i in range(rank_max):
-    #img1 = resBB.x[:, i].reshape(height, width) / max(resBB.x[:, i])
-    img1_scaled = np.clip(resBB.x[:, i].reshape(height, width), 0, 255)
-    #img1_scaled = img1 * 255
+    img1_scaled = np.clip(res.x[:, i].reshape(height, width), 0, 255)
 
     im_save = Image.fromarray((img1_scaled).astype(np.uint8))
     im_save.save(f"img/recovered_low_rank_matrix_{i}.png")
 
+# For visualization, we compare the low rank background with a reference image from the dataset.
 ref_idx = 272
 ref_img = Y[:, ref_idx].reshape(height, width)
+# Compute the difference between the reference image and the recovered low-rank matrix to highlight the foreground (moving objects).
 diff_img = np.abs(ref_img - img1_scaled)
 foreground = np.clip(diff_img, 0, 255)
 im_save_foreground = Image.fromarray((foreground).astype(np.uint8))
@@ -197,14 +187,8 @@ im_save_foreground.save(f"img/foreground_{ref_idx}.png")
 im_save_ref = Image.fromarray((ref_img).astype(np.uint8))
 im_save_ref.save(f"img/reference_image_{ref_idx}.png")
 
-print(resBB)
 
 plt.imshow(img1_scaled, cmap='gray')
 plt.title("Recovered Low-Rank Matrix")
 plt.axis('off')
 plt.show()
-
-
-#res = proj_grad.pgd_mon(x0=x_start, f=obj, grad=grad, proj=proj,
-#                        max_iter=1000, TOL=1e-4, barzilai_borwein=False)
-#print(res)
